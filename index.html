@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tic-Tac-Toe</title>
+    <style>
+      body {
+        margin: 0;
+        display: flex;
+        min-height: 100vh;
+        align-items: center;
+        justify-content: center;
+        background: #0d0d0f;
+      }
+      #p5-wrap {
+        width: min(100vmin, 1100px);
+        max-width: 100%;
+      }
+      #p5-wrap canvas {
+        width: 100% !important;
+        height: auto !important;
+        display: block;
+      }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/p5@1.11.3/lib/p5.min.js"></script>
+  </head>
+  <body>
+    <main id="p5-wrap"></main>
+    <script src="sketch.js"></script>
+  </body>
+</html>

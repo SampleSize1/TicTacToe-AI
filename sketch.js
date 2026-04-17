@@ -35,101 +35,114 @@ const MUTATION_STRENGTH = 0.35;
 const ELITE_COUNT = 2;
 const WIN_SCORE = 1;
 const TIE_SCORE = 0.5;
-/** Plies simulated per draw() frame at each speed tier (approx. at 60fps: fast ~1s/gen, medium ~12s, slow ~minutes). */
-const TRAINING_SPEED_PLIES = [1, 12, 160];
-const TRAINING_SPEED_LABELS = ["slow", "medium", "fast"];
+/** Plies simulated per draw() frame at each speed tier. -1 means "Turbo" (time-budgeted). */
+const TRAINING_SPEED_PLIES = [1, 12, 160, -1];
+const TRAINING_SPEED_LABELS = ["slow", "medium", "fast", "turbo"];
 const AUTO_GEN_INTERVAL_MS = 1200;
 
 const LINE_WEIGHT = 2 * S;
 const PAD_FR = 0.18;
 
-// --- Board / game (no training globals) ------------------------------------
+// --- Board / game ---------------------------------------------------------
 
-function emptyBoard() {
-  return [
-    [null, null, null],
-    [null, null, null],
-    [null, null, null],
-  ];
-}
+class Board {
+  constructor() {
+    this.cells = [
+      [null, null, null],
+      [null, null, null],
+      [null, null, null],
+    ];
+  }
 
-function boardFullBoard(board) {
-  for (let r = 0; r < 3; r++) {
-    for (let c = 0; c < 3; c++) {
-      if (board[r][c] === null) return false;
+  isFull() {
+    for (let r = 0; r < 3; r++) {
+      for (let c = 0; c < 3; c++) {
+        if (this.cells[r][c] === null) return false;
+      }
     }
-  }
-  return true;
-}
-
-function checkWinOnBoard(board, player) {
-  for (let r = 0; r < 3; r++) {
-    if (
-      board[r][0] === player &&
-      board[r][1] === player &&
-      board[r][2] === player
-    ) {
-      return true;
-    }
-  }
-  for (let c = 0; c < 3; c++) {
-    if (
-      board[0][c] === player &&
-      board[1][c] === player &&
-      board[2][c] === player
-    ) {
-      return true;
-    }
-  }
-  if (
-    board[0][0] === player &&
-    board[1][1] === player &&
-    board[2][2] === player
-  ) {
     return true;
   }
-  if (
-    board[0][2] === player &&
-    board[1][1] === player &&
-    board[2][0] === player
-  ) {
-    return true;
-  }
-  return false;
-}
 
-function boardToInput(board, myPiece) {
-  const input = [];
-  for (let r = 0; r < 3; r++) {
-    for (let c = 0; c < 3; c++) {
-      const cell = board[r][c];
-      if (cell === null) input.push(0);
-      else if (cell === myPiece) input.push(1);
-      else input.push(-1);
+  checkWin(player) {
+    for (let r = 0; r < 3; r++) {
+      if (
+        this.cells[r][0] === player &&
+        this.cells[r][1] === player &&
+        this.cells[r][2] === player
+      )
+        return true;
     }
+    for (let c = 0; c < 3; c++) {
+      if (
+        this.cells[0][c] === player &&
+        this.cells[1][c] === player &&
+        this.cells[2][c] === player
+      )
+        return true;
+    }
+    if (
+      this.cells[0][0] === player &&
+      this.cells[1][1] === player &&
+      this.cells[2][2] === player
+    )
+      return true;
+    if (
+      this.cells[0][2] === player &&
+      this.cells[1][1] === player &&
+      this.cells[2][0] === player
+    )
+      return true;
+    return false;
   }
-  return input;
+
+  toInput(myPiece) {
+    const input = [];
+    for (let r = 0; r < 3; r++) {
+      for (let c = 0; c < 3; c++) {
+        const cell = this.cells[r][c];
+        if (cell === null) input.push(0);
+        else if (cell === myPiece) input.push(1);
+        else input.push(-1);
+      }
+    }
+    return input;
+  }
+
+  getEmptyIndices() {
+    const empties = [];
+    for (let i = 0; i < 9; i++) {
+      const r = Math.floor(i / 3);
+      const c = i % 3;
+      if (this.cells[r][c] === null) empties.push(i);
+    }
+    return empties;
+  }
+
+  makeMove(index, player) {
+    const r = Math.floor(index / 3);
+    const c = index % 3;
+    if (this.cells[r][c] === null) {
+      this.cells[r][c] = player;
+      return true;
+    }
+    return false;
+  }
 }
 
 function randomLegalIndex(board) {
-  const empties = [];
-  for (let i = 0; i < 9; i++) {
-    const r = Math.floor(i / 3);
-    const c = i % 3;
-    if (board[r][c] === null) empties.push(i);
-  }
+  const empties = board.getEmptyIndices();
+  if (empties.length === 0) return -1;
   return empties[Math.floor(random(empties.length))];
 }
 
 function pickNetMove(net, board, myPiece) {
-  const input = boardToInput(board, myPiece);
+  const input = board.toInput(myPiece);
   const { out } = net.forward(input);
   let best = -1;
   let bestScore = -Infinity;
-  for (let i = 0; i < 9; i++) {
-    const r = Math.floor(i / 3);
-    const c = i % 3;
-    if (board[r][c] !== null) continue;
+  const empties = board.getEmptyIndices();
+
+  for (const i of empties) {
     if (out[i] > bestScore) {
       bestScore = out[i];
       best = i;
@@ -222,149 +235,372 @@ class NeuralNet {
       }
     }
   }
+
+  serialize() {
+    return JSON.stringify({
+      hiddenSize: this.hiddenSize,
+      wIH: this.wIH,
+      bH: this.bH,
+      wHO: this.wHO,
+      bO: this.bO,
+    });
+  }
+
+  static deserialize(data) {
+    if (typeof data === "string") data = JSON.parse(data);
+    const n = new NeuralNet();
+    n.hiddenSize = data.hiddenSize;
+    n.wIH = data.wIH;
+    n.bH = data.bH;
+    n.wHO = data.wHO;
+    n.bO = data.bO;
+    return n;
+  }
 }
 
-// --- Genetic algorithm state ------------------------------------------------
+// --- Genetic algorithm & Training -------------------------------------------
 
-let population = [];
-let generation = 0;
-let bestFitnessThisGen = 0;
-let showcaseBrain = null;
+class EvolutionaryTrainer {
+  constructor() {
+    this.population = [];
+    this.generation = 0;
+    this.bestFitnessThisGen = 0;
+    this.showcaseBrain = null;
 
-let autoTrain = false;
-let lastAutoGenMs = 0;
+    this.trainingActive = false;
+    this.fitnessesWorking = [];
+    this.trainInd = 0;
+    this.trainGame = 0;
+    this.visWins = 0;
+    this.visTies = 0;
+    this.visBoard = null;
+    this.visTurn = "X";
+    this.visNetIsX = true;
 
-let trainingSpeedIndex = 0;
-
-function initPopulation() {
-  population = [];
-  for (let i = 0; i < POP; i++) {
-    population.push(new NeuralNet());
-  }
-  if (population.length > 0) {
-    showcaseBrain = population[0].copy();
-  }
-}
-
-function completeBreeding(fitnesses) {
-  const idx = [];
-  for (let i = 0; i < POP; i++) {
-    idx.push(i);
-  }
-  idx.sort(function (a, b) {
-    return fitnesses[b] - fitnesses[a];
-  });
-
-  const sorted = [];
-  for (let k = 0; k < idx.length; k++) {
-    sorted.push(population[idx[k]]);
+    this.initPopulation();
   }
 
-  bestFitnessThisGen = fitnesses[idx[0]];
-  showcaseBrain = sorted[0].copy();
+  initPopulation() {
+    this.population = [];
+    for (let i = 0; i < POP; i++) {
+      this.population.push(new NeuralNet());
+    }
+    this.generation = 0;
+    this.bestFitnessThisGen = 0;
+    this.trainingActive = false;
+    this.visBoard = new Board();
 
-  const next = [];
-  for (let e = 0; e < ELITE_COUNT; e++) {
-    next.push(sorted[e].copy());
+    if (this.loadFromLocalStorage()) {
+      console.log("Loaded existing brain from localStorage");
+    } else if (this.population.length > 0) {
+      this.showcaseBrain = this.population[0].copy();
+    }
   }
-  const topHalf = Math.max(1, Math.ceil(POP / 2));
-  while (next.length < POP) {
-    const parent = sorted[Math.floor(random(topHalf))];
-    const child = parent.copy();
-    child.mutate(MUTATION_RATE, MUTATION_STRENGTH);
-    next.push(child);
+
+  saveToLocalStorage() {
+    if (!this.showcaseBrain) return;
+    const data = {
+      generation: this.generation,
+      bestFitness: this.bestFitnessThisGen,
+      brain: this.showcaseBrain.serialize(),
+    };
+    localStorage.setItem("tictactoe_evolution_data", JSON.stringify(data));
   }
-  population = next;
-  generation++;
-}
 
-// --- Visual training (real eval games, stepped each frame) -------------------
-
-let trainingActive = false;
-let fitnessesWorking = [];
-let trainInd = 0;
-let trainGame = 0;
-let visWins = 0;
-let visTies = 0;
-let visBoard = null;
-let visTurn = "X";
-let visNetIsX = true;
-
-function resetVisualGame() {
-  visBoard = emptyBoard();
-  visNetIsX = random() < 0.5;
-  visTurn = "X";
-}
-
-function startGenerationTraining() {
-  if (trainingActive) return;
-  trainingActive = true;
-  trainInd = 0;
-  trainGame = 0;
-  visWins = 0;
-  visTies = 0;
-  fitnessesWorking = [];
-  for (let i = 0; i < POP; i++) {
-    fitnessesWorking.push(0);
+  loadFromLocalStorage() {
+    const raw = localStorage.getItem("tictactoe_evolution_data");
+    if (!raw) return false;
+    try {
+      const data = JSON.parse(raw);
+      this.generation = data.generation || 0;
+      this.bestFitnessThisGen = data.bestFitness || 0;
+      this.showcaseBrain = NeuralNet.deserialize(data.brain);
+      // Fill population with mutants of the loaded champion to continue evolution
+      this.population = [];
+      for (let i = 0; i < POP; i++) {
+        const child = this.showcaseBrain.copy();
+        if (i > 0) child.mutate(MUTATION_RATE, MUTATION_STRENGTH);
+        this.population.push(child);
+      }
+      return true;
+    } catch (e) {
+      console.error("Failed to load from localStorage", e);
+      return false;
+    }
   }
-  resetVisualGame();
-}
 
-function finishCurrentTrainingGame() {
-  trainGame++;
-  if (trainGame >= GAMES_PER_BRAIN) {
-    fitnessesWorking[trainInd] =
-      visWins * WIN_SCORE + visTies * TIE_SCORE;
-    trainInd++;
-    trainGame = 0;
-    visWins = 0;
-    visTies = 0;
-    if (trainInd >= POP) {
-      completeBreeding(fitnessesWorking);
-      trainingActive = false;
-      visBoard = emptyBoard();
-      visTurn = "X";
-      lastAutoGenMs = millis();
+  startGenerationTraining() {
+    if (this.trainingActive) return;
+    this.trainingActive = true;
+    this.trainInd = 0;
+    this.trainGame = 0;
+    this.visWins = 0;
+    this.visTies = 0;
+    this.fitnessesWorking = new Array(POP).fill(0);
+    this.resetVisualGame();
+  }
+
+  resetVisualGame() {
+    this.visBoard = new Board();
+    this.visNetIsX = random() < 0.5;
+    this.visTurn = "X";
+  }
+
+  advanceVisualTrainingPly() {
+    if (!this.trainingActive || !this.visBoard) return;
+
+    const net = this.population[this.trainInd];
+    const isNet =
+      (this.visTurn === "X" && this.visNetIsX) ||
+      (this.visTurn === "O" && !this.visNetIsX);
+
+    let idx;
+    if (isNet) {
+      idx = pickNetMove(net, this.visBoard, this.visTurn);
+      if (idx < 0) idx = randomLegalIndex(this.visBoard);
+    } else {
+      idx = randomLegalIndex(this.visBoard);
+    }
+
+    if (idx !== -1) {
+      this.visBoard.makeMove(idx, this.visTurn);
+    }
+
+    if (this.visBoard.checkWin(this.visTurn)) {
+      if (isNet) this.visWins++;
+      this.finishCurrentTrainingGame();
       return;
     }
+    if (this.visBoard.isFull()) {
+      this.visTies++;
+      this.finishCurrentTrainingGame();
+      return;
+    }
+    this.visTurn = this.visTurn === "X" ? "O" : "X";
   }
-  resetVisualGame();
+
+  finishCurrentTrainingGame() {
+    this.trainGame++;
+    if (this.trainGame >= GAMES_PER_BRAIN) {
+      this.fitnessesWorking[this.trainInd] =
+        this.visWins * WIN_SCORE + this.visTies * TIE_SCORE;
+      this.trainInd++;
+      this.trainGame = 0;
+      this.visWins = 0;
+      this.visTies = 0;
+      if (this.trainInd >= POP) {
+        this.completeBreeding(this.fitnessesWorking);
+        this.trainingActive = false;
+        this.visBoard = new Board();
+        this.visTurn = "X";
+        return;
+      }
+    }
+    this.resetVisualGame();
+  }
+
+  completeBreeding(fitnesses) {
+    const idx = Array.from({ length: POP }, (_, i) => i);
+    idx.sort((a, b) => fitnesses[b] - fitnesses[a]);
+
+    const sorted = idx.map((i) => this.population[i]);
+
+    this.bestFitnessThisGen = fitnesses[idx[0]];
+    this.showcaseBrain = sorted[0].copy();
+
+    const next = [];
+    for (let e = 0; e < ELITE_COUNT; e++) {
+      next.push(sorted[e].copy());
+    }
+    const topHalf = Math.max(1, Math.ceil(POP / 2));
+    while (next.length < POP) {
+      const parent = sorted[Math.floor(random(topHalf))];
+      const child = parent.copy();
+      child.mutate(MUTATION_RATE, MUTATION_STRENGTH);
+      next.push(child);
+    }
+    this.population = next;
+    this.generation++;
+    this.saveToLocalStorage();
+  }
+
+  clearStorage() {
+    localStorage.removeItem("tictactoe_evolution_data");
+  }
 }
 
-function advanceVisualTrainingPly() {
-  if (!trainingActive || visBoard === null) return;
+const AppState = {
+  TRAINING: "TRAINING",
+  PLAYING: "PLAYING",
+  IDLE: "IDLE",
+};
 
-  const net = population[trainInd];
-  const isNet =
-    (visTurn === "X" && visNetIsX) || (visTurn === "O" && !visNetIsX);
-  if (isNet) {
-    let idx = pickNetMove(net, visBoard, visTurn);
-    if (idx < 0) {
-      idx = randomLegalIndex(visBoard);
+class GameManager {
+  constructor() {
+    this.trainer = new EvolutionaryTrainer();
+    this.state = AppState.IDLE;
+    this.autoTrain = false;
+    this.lastAutoGenMs = millis();
+    this.trainingSpeedIndex = 0;
+
+    // Batch training state
+    this.batchTargetGen = 0;
+
+    // Player vs AI state
+    this.humanBoard = null;
+    this.humanPiece = "X";
+    this.aiPiece = "O";
+    this.humanTurn = true;
+    this.gameResult = null; // "X", "O", or "Tie"
+  }
+
+  update() {
+    // If we have a batch target, keep starting training until we hit it
+    if (this.batchTargetGen > this.trainer.generation) {
+      if (this.state !== AppState.TRAINING) {
+        this.startTraining();
+      }
     }
-    const r = Math.floor(idx / 3);
-    const c = idx % 3;
-    visBoard[r][c] = visTurn;
-  } else {
-    const idx = randomLegalIndex(visBoard);
-    const r = Math.floor(idx / 3);
-    const c = idx % 3;
-    visBoard[r][c] = visTurn;
-  }
-  if (checkWinOnBoard(visBoard, visTurn)) {
-    if (isNet) {
-      visWins++;
+
+    if (
+      this.autoTrain &&
+      this.state !== AppState.TRAINING &&
+      this.state !== AppState.PLAYING &&
+      millis() - this.lastAutoGenMs >= AUTO_GEN_INTERVAL_MS
+    ) {
+      this.startTraining();
     }
-    finishCurrentTrainingGame();
-    return;
+
+    if (this.state === AppState.TRAINING) {
+      const pLimit = TRAINING_SPEED_PLIES[this.trainingSpeedIndex];
+      const startTime = performance.now();
+      let pCount = 0;
+
+      while (true) {
+        const wasActive = this.trainer.trainingActive;
+        this.trainer.advanceVisualTrainingPly();
+
+        if (!this.trainer.trainingActive && wasActive) {
+          this.state = AppState.IDLE;
+          this.lastAutoGenMs = millis();
+          break;
+        }
+
+        pCount++;
+        // If fixed limit mode (slow/med/fast)
+        if (pLimit !== -1 && pCount >= pLimit) break;
+        // If Turbo mode, limit by time (e.g. 25ms budget per frame)
+        if (pLimit === -1 && performance.now() - startTime > 25) break;
+      }
+    }
+
+    if (this.state === AppState.PLAYING && !this.humanTurn && !this.gameResult) {
+      // Small delay so AI doesn't move instantly
+      if (frameCount % 30 === 0) {
+        this.aiMove();
+      }
+    }
   }
-  if (boardFullBoard(visBoard)) {
-    visTies++;
-    finishCurrentTrainingGame();
-    return;
+
+  startHumanGame() {
+    this.state = AppState.PLAYING;
+    this.humanBoard = new Board();
+    this.humanPiece = random() < 0.5 ? "X" : "O";
+    this.aiPiece = this.humanPiece === "X" ? "O" : "X";
+    this.humanTurn = this.humanPiece === "X";
+    this.gameResult = null;
   }
-  visTurn = visTurn === "X" ? "O" : "X";
+
+  handleMouseClick(mx, my, ox, oy, boardPx) {
+    if (this.state !== AppState.PLAYING || !this.humanTurn || this.gameResult)
+      return;
+
+    const cell = boardPx / 3;
+    const c = Math.floor((mx - ox) / cell);
+    const r = Math.floor((my - oy) / cell);
+
+    if (r >= 0 && r < 3 && c >= 0 && c < 3) {
+      const idx = r * 3 + c;
+      if (this.humanBoard.makeMove(idx, this.humanPiece)) {
+        this.checkGameEnd();
+        this.humanTurn = false;
+      }
+    }
+  }
+
+  aiMove() {
+    if (!this.trainer.showcaseBrain) return;
+    const idx = pickNetMove(
+      this.trainer.showcaseBrain,
+      this.humanBoard,
+      this.aiPiece
+    );
+    if (idx !== -1) {
+      this.humanBoard.makeMove(idx, this.aiPiece);
+    } else {
+      // Fallback to random if AI is confused
+      const ridx = randomLegalIndex(this.humanBoard);
+      if (ridx !== -1) this.humanBoard.makeMove(ridx, this.aiPiece);
+    }
+    this.checkGameEnd();
+    this.humanTurn = true;
+  }
+
+  checkGameEnd() {
+    if (this.humanBoard.checkWin(this.humanPiece)) this.gameResult = "You Win!";
+    else if (this.humanBoard.checkWin(this.aiPiece)) this.gameResult = "AI Wins!";
+    else if (this.humanBoard.isFull()) this.gameResult = "Tie!";
+  }
+
+  startTraining() {
+    // Force switch to TRAINING state
+    this.state = AppState.TRAINING;
+    this.humanBoard = null;
+    this.gameResult = null;
+    this.trainer.startGenerationTraining();
+  }
+
+  startBatch(count) {
+    this.batchTargetGen = this.trainer.generation + count;
+    this.setSpeed(2); // Set to fast for batches
+    this.startTraining();
+  }
+
+  toggleAuto() {
+    this.autoTrain = !this.autoTrain;
+    this.lastAutoGenMs = millis();
+    if (!this.autoTrain) {
+      this.batchTargetGen = 0;
+    }
+  }
+
+  reset() {
+    this.trainer.clearStorage();
+    this.trainer.initPopulation();
+    this.state = AppState.IDLE;
+    this.autoTrain = false;
+    this.batchTargetGen = 0;
+    this.lastAutoGenMs = millis();
+    this.humanBoard = null;
+    this.gameResult = null;
+  }
+
+  setSpeed(index) {
+    this.trainingSpeedIndex = constrain(
+      index,
+      0,
+      TRAINING_SPEED_LABELS.length - 1
+    );
+  }
+
+  cycleSpeed(dir) {
+    this.trainingSpeedIndex =
+      (this.trainingSpeedIndex + dir + TRAINING_SPEED_LABELS.length) %
+      TRAINING_SPEED_LABELS.length;
+  }
 }
+
+let mgr;
 
 let inputNodePos = [];
 let hiddenNodePos = [];
@@ -476,7 +712,7 @@ function drawNetworkViz(net, input, hidden, out, boardForLegal) {
     for (let o = 0; o < 9; o++) {
       const r = Math.floor(o / 3);
       const c = o % 3;
-      if (boardForLegal[r][c] === null) {
+      if (boardForLegal.cells[r][c] === null) {
         noFill();
         stroke(90, 160, 110, 140);
         strokeWeight(1 * S);
@@ -500,7 +736,7 @@ function drawBoardRegion(board, ox, oy, boardPx) {
   }
   for (let r = 0; r < 3; r++) {
     for (let c = 0; c < 3; c++) {
-      const mark = board[r][c];
+      const mark = board.cells[r][c];
       const x = ox + c * cell;
       const y = oy + r * cell;
       if (mark === "X") {
@@ -519,14 +755,19 @@ function drawBoardRegion(board, ox, oy, boardPx) {
 }
 
 function netViewBoardAndPiece() {
-  if (trainingActive && visBoard !== null) {
+  if (mgr.state === AppState.TRAINING && mgr.trainer.visBoard !== null) {
     return {
-      board: visBoard,
-      piece: visNetIsX ? "X" : "O",
+      board: mgr.trainer.visBoard,
+      piece: mgr.trainer.visNetIsX ? "X" : "O",
+    };
+  } else if (mgr.state === AppState.PLAYING && mgr.humanBoard !== null) {
+    return {
+      board: mgr.humanBoard,
+      piece: mgr.humanTurn ? mgr.humanPiece : mgr.aiPiece,
     };
   }
   return {
-    board: emptyBoard(),
+    board: new Board(),
     piece: "X",
   };
 }
@@ -537,32 +778,13 @@ function setup() {
   const cnv = createCanvas(CANVAS, CANVAS);
   cnv.parent("p5-wrap");
   layoutNetNodes();
-  initPopulation();
-  visBoard = emptyBoard();
-  visTurn = "X";
-  lastAutoGenMs = millis();
+  mgr = new GameManager();
 }
 
 function draw() {
   background(22, 22, 26);
 
-  if (
-    autoTrain &&
-    !trainingActive &&
-    millis() - lastAutoGenMs >= AUTO_GEN_INTERVAL_MS
-  ) {
-    startGenerationTraining();
-  }
-
-  if (trainingActive) {
-    const plies = TRAINING_SPEED_PLIES[trainingSpeedIndex];
-    for (let p = 0; p < plies; p++) {
-      advanceVisualTrainingPly();
-      if (!trainingActive) {
-        break;
-      }
-    }
-  }
+  mgr.update();
 
   const boardPx = 252 * S;
   const ox = (SPLIT_X - boardPx) / 2;
@@ -575,12 +797,13 @@ function draw() {
   line(SPLIT_X, 0, SPLIT_X, CANVAS);
 
   const netViz =
-    trainingActive && population.length > trainInd
-      ? population[trainInd]
-      : showcaseBrain;
+    mgr.state === AppState.TRAINING &&
+    mgr.trainer.population.length > mgr.trainer.trainInd
+      ? mgr.trainer.population[mgr.trainer.trainInd]
+      : mgr.trainer.showcaseBrain;
 
   if (netViz !== null) {
-    const inp = boardToInput(view.board, view.piece);
+    const inp = view.board.toInput(view.piece);
     const fh = netViz.forward(inp);
     drawNetColumnCaptions();
     drawNetworkViz(
@@ -588,7 +811,7 @@ function draw() {
       inp,
       fh.hidden,
       fh.out,
-      trainingActive ? visBoard : null
+      mgr.state === AppState.TRAINING ? mgr.trainer.visBoard : null
     );
     drawNetNodeKey();
   }
@@ -599,52 +822,57 @@ function draw() {
   textSize(16 * S);
   text(
     "Generation: " +
-      generation +
+      mgr.trainer.generation +
+      "    State: " +
+      mgr.state +
       "    Auto: " +
-      (autoTrain ? "on" : "off") +
-      "    Train: " +
-      TRAINING_SPEED_LABELS[trainingSpeedIndex],
+      (mgr.autoTrain ? "on" : "off"),
     HUD_X,
     HUD_Y_GEN
   );
   textSize(15 * S);
-  text("Best fitness: " + nf(bestFitnessThisGen, 0, 2), HUD_X, HUD_Y_FIT);
+  text(
+    "Best fitness: " + nf(mgr.trainer.bestFitnessThisGen, 0, 2),
+    HUD_X,
+    HUD_Y_FIT
+  );
 
   textSize(11 * S);
   fill(120, 122, 132);
-  if (trainingActive) {
+  if (mgr.state === AppState.TRAINING) {
     fill(180, 190, 210);
-    text(
-      "Training for gen " +
-        (generation + 1) +
-        " — brain " +
-        (trainInd + 1) +
-        "/" +
-        POP +
-        " — eval game " +
-        (trainGame + 1) +
-        "/" +
-        GAMES_PER_BRAIN,
-      HUD_X,
-      HUD_Y_ROW3
-    );
-    fill(120, 122, 132);
-    text(
-      "Watch: same brain plays vs random until fitness is tallied.",
-      HUD_X,
-      HUD_Y_ROW4
-    );
+    let statusText = "Training gen " + (mgr.trainer.generation + 1);
+    if (mgr.batchTargetGen > mgr.trainer.generation) {
+      statusText += " (Batch target: " + mgr.batchTargetGen + ")";
+    }
+    statusText += " — brain " + (mgr.trainer.trainInd + 1) + "/" + POP;
+    text(statusText, HUD_X, HUD_Y_ROW3);
+  } else if (mgr.state === AppState.PLAYING) {
+    fill(255, 200, 100);
+    if (mgr.gameResult) {
+      textSize(16 * S);
+      text(mgr.gameResult + " — Press P to play again", HUD_X, HUD_Y_ROW3);
+      textSize(11 * S);
+    } else {
+      text(
+        mgr.humanTurn ? "Your turn (" + mgr.humanPiece + ")" : "AI thinking...",
+        HUD_X,
+        HUD_Y_ROW3
+      );
+    }
   } else {
-    text(
-      "Idle — Press Space / N to train & evolve one generation",
-      HUD_X,
-      HUD_Y_ROW3
-    );
-    text("A: auto train (toggle)", HUD_X, HUD_Y_ROW4);
+    text("System Idle", HUD_X, HUD_Y_ROW3);
   }
-  text("R: reset evolution", HUD_X, HUD_Y_R);
+
+  fill(120, 122, 132);
   text(
-    "] / [ : training speed   1/2/3 : slow/med/fast",
+    "Space/N: train 1    B: train 10    M: train 50    P: play",
+    HUD_X,
+    HUD_Y_ROW4
+  );
+  text("A: auto-train toggle    R: reset evolution", HUD_X, HUD_Y_R);
+  text(
+    "1/2/3/4: speed (" + TRAINING_SPEED_LABELS[mgr.trainingSpeedIndex] + ")",
     HUD_X,
     HUD_Y_SPEED
   );
@@ -654,7 +882,14 @@ function draw() {
   fill(100, 102, 115);
   const footY = CANVAS - 36 * S;
   const footX = 12 * S;
-  if (!trainingActive) {
+  if (mgr.state === AppState.PLAYING) {
+    text(
+      "Left: click the board to place your piece. Right: current champion brain.",
+      footX,
+      footY,
+      LEFT_PANEL_TEXT_W
+    );
+  } else if (mgr.state !== AppState.TRAINING) {
     text(
       "Left: empty board between runs. Right: last generation’s champion network.",
       footX,
@@ -663,7 +898,11 @@ function draw() {
     );
   } else {
     text(
-      "Left: fitness game for brain " + (trainInd + 1) + " / " + POP + ".",
+      "Left: fitness game for brain " +
+        (mgr.trainer.trainInd + 1) +
+        " / " +
+        POP +
+        ".",
       footX,
       footY,
       LEFT_PANEL_TEXT_W
@@ -671,48 +910,60 @@ function draw() {
   }
 }
 
+function mouseClicked() {
+  const boardPx = 252 * S;
+  const ox = (SPLIT_X - boardPx) / 2;
+  const oy = (CANVAS - boardPx) / 2 - 18 * S;
+  mgr.handleMouseClick(mouseX, mouseY, ox, oy, boardPx);
+}
+
 function keyPressed() {
   if (key === "r" || key === "R") {
-    generation = 0;
-    bestFitnessThisGen = 0;
-    trainingActive = false;
-    initPopulation();
-    visBoard = emptyBoard();
-    lastAutoGenMs = millis();
+    mgr.reset();
+    return;
+  }
+  if (key === "p" || key === "P") {
+    mgr.startHumanGame();
+    return;
+  }
+  if (key === "b" || key === "B") {
+    mgr.startBatch(10);
+    return;
+  }
+  if (key === "m" || key === "M") {
+    mgr.startBatch(50);
     return;
   }
   if (key === "a" || key === "A") {
-    autoTrain = !autoTrain;
-    lastAutoGenMs = millis();
+    mgr.toggleAuto();
     return;
   }
   if (key === " " || keyCode === 32 || key === "n" || key === "N") {
-    if (!trainingActive) {
-      startGenerationTraining();
-    }
+    mgr.startTraining();
     return;
   }
   if (key === "]") {
-    trainingSpeedIndex =
-      (trainingSpeedIndex + 1) % TRAINING_SPEED_LABELS.length;
+    mgr.cycleSpeed(1);
     return;
   }
   if (key === "[") {
-    trainingSpeedIndex =
-      (trainingSpeedIndex + TRAINING_SPEED_LABELS.length - 1) %
-      TRAINING_SPEED_LABELS.length;
+    mgr.cycleSpeed(-1);
     return;
   }
   if (key === "1") {
-    trainingSpeedIndex = 0;
+    mgr.setSpeed(0);
     return;
   }
   if (key === "2") {
-    trainingSpeedIndex = 1;
+    mgr.setSpeed(1);
     return;
   }
   if (key === "3") {
-    trainingSpeedIndex = 2;
+    mgr.setSpeed(2);
+    return;
+  }
+  if (key === "4") {
+    mgr.setSpeed(3);
     return;
   }
 }
